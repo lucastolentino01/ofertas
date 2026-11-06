@@ -1,0 +1,72 @@
+name: Bot de Ofertas Shopee
+
+on:
+  schedule:
+    # A cada 2h das 8h às 22h (horário de Brasília). Cron do GitHub é em UTC.
+    - cron: "0 11-23/2 * * *"
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}   # botão "Run workflow" para rodar na hora
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ofertas
+  cancel-in-progress: false
+
+jobs:
+  rodar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pynacl
+
+      - name: Buscar e postar ofertas (Telegram + fila do Instagram)
+        env:
+          SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+          SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          KEYWORDS: ${{ vars.KEYWORDS }}
+          POSTS_PER_RUN: ${{ vars.POSTS_PER_RUN }}
+          MIN_DISCOUNT: ${{ vars.MIN_DISCOUNT }}
+          MIN_RATING: ${{ vars.MIN_RATING }}
+          MIN_SALES: ${{ vars.MIN_SALES }}
+          MAX_PRICE: ${{ vars.MAX_PRICE }}
+          SORT_TYPE: ${{ vars.SORT_TYPE }}
+          SITE_TITLE: ${{ vars.SITE_TITLE }}
+          TELEGRAM_CHANNEL_LINK: ${{ vars.TELEGRAM_CHANNEL_LINK }}
+          IG_STORIES_PER_RUN: ${{ vars.IG_STORIES_PER_RUN }}
+          IG_HANDLE: ${{ vars.IG_HANDLE }}
+        run: python main.py
+
+      - name: Salvar histórico, site e imagens dos stories
+        run: |
+          git config user.name "bot-ofertas"
+          git config user.email "bot-ofertas@users.noreply.github.com"
+          git add data docs
+          git diff --cached --quiet || git commit -m "ofertas $(date -u +%F_%H%M)"
+          git pull --rebase --autostash || true
+          git push
+
+      - name: Publicar stories no Instagram
+        continue-on-error: true   # se o Instagram falhar, o Telegram não é afetado
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_MEU_ID: ${{ secrets.TELEGRAM_MEU_ID }}
+          IG_MAX_POR_RODADA: ${{ vars.IG_MAX_POR_RODADA }}
+        run: python publicar_stories.py
+
+      - name: Salvar status do Instagram
+        run: |
+          git add data
+          git diff --cached --quiet || git commit -m "instagram $(date -u +%F_%H%M)"
+          git pull --rebase --autostash || true
+          git push
