@@ -42,6 +42,8 @@ jobs:
           TELEGRAM_CHANNEL_LINK: ${{ vars.TELEGRAM_CHANNEL_LINK }}
           IG_STORIES_PER_RUN: ${{ vars.IG_STORIES_PER_RUN }}
           IG_HANDLE: ${{ vars.IG_HANDLE }}
+          THEME: ${{ vars.THEME }}
+          SUBID_PREFIX: ${{ vars.SUBID_PREFIX }}
         run: python main.py
 
       - name: Salvar histórico, site e imagens dos stories
@@ -58,6 +60,7 @@ jobs:
         env:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_HANDLE: ${{ vars.IG_HANDLE }}
           GH_PAT: ${{ secrets.GH_PAT }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_MEU_ID: ${{ secrets.TELEGRAM_MEU_ID }}
