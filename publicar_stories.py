@@ -177,6 +177,8 @@ def descobrir_usuario(token, verbose=False):
 
     candidatos = []
     uid = cfg("IG_USER_ID")
+    if uid:  # a conta informada tem prioridade (importante quando há mais de uma loja)
+        candidatos.append(uid)
     # 1) contas ligadas a Páginas
     try:
         pags = ig("GET", "me/accounts", token, fields="instagram_business_account{id,username}").get("data", [])
@@ -205,33 +207,32 @@ def descobrir_usuario(token, verbose=False):
                 log(f"{edge}: {e}")
     if uid:
         candidatos.append(uid)
-    # 3) testa cada candidato como conta de publicação
+    # 3) testa cada candidato; se IG_HANDLE estiver definido, só aceita a conta com esse @
+    alvo = (cfg("IG_HANDLE") or "").lstrip("@").strip().lower()
+    achadas = []
     for cid in dict.fromkeys(candidatos):
-        # descobre que tipo de objeto é esse número
-        try:
-            meta = ig("GET", cid, token, metadata="1", fields="id").get("metadata", {}).get("type")
-            log(f"{cid}: tipo {meta}")
-        except ErroIG as e:
-            log(f"{cid}: tipo ? ({e})")
-        # se for uma Página, pega a conta do Instagram ligada a ela
         try:
             c = ig("GET", cid, token, fields="instagram_business_account{id,username}").get("instagram_business_account")
             if c:
                 log(f"{cid}: Página com Instagram {c.get('username')} ({c['id']})")
-                candidatos.append(c["id"])
                 cid = c["id"]
         except ErroIG:
             pass
         try:
+            nome = ig("GET", cid, token, fields="username").get("username")
+        except ErroIG:
+            nome = None
+        try:
             ig("GET", f"{cid}/content_publishing_limit", token)
-            try:
-                nome = ig("GET", cid, token, fields="username").get("username")
-            except ErroIG:
-                nome = None
-            log(f"{cid}: pode publicar ✔")
-            return {"user_id": cid, "username": nome or "techbarato.ofertas", "account_type": "BUSINESS"}
         except ErroIG as e:
             log(f"{cid}: não serve para publicar ({e})")
+            continue
+        log(f"{cid}: @{nome or '?'} pode publicar ✔")
+        achadas.append((cid, nome))
+        if not alvo or (nome or "").lower() == alvo:
+            return {"user_id": cid, "username": nome or alvo, "account_type": "BUSINESS"}
+    if achadas and alvo:
+        log(f"nenhuma conta com o @{alvo}. Achei: {', '.join('@' + str(n) for _, n in achadas)}")
     raise ErroIG("Não achei a conta do Instagram com esse token. Veja os detalhes acima e mande um print ao Claude.")
 
 

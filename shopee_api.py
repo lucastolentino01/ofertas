@@ -38,7 +38,8 @@ class ShopeeAffiliate:
             raise ShopeeAPIError("Configure SHOPEE_APP_ID e SHOPEE_APP_SECRET no configuracao.txt")
         self.app_id = app_id
         self.secret = secret
-        self._campos = None  # descobre sozinho qual conjunto de campos funciona
+        self._campos = None    # descobre sozinho qual conjunto de campos funciona
+        self._variacao = None  # e qual formato de busca a Shopee aceita
 
     def _call(self, query: str, tentativas: int = 3) -> dict:
         payload = json.dumps({"query": query}, separators=(",", ":"), ensure_ascii=False)
@@ -58,44 +59,58 @@ class ShopeeAffiliate:
             ext = erros[0].get("extensions") or {}
             code = ext.get("code")
             msg = ext.get("message") or erros[0].get("message")
-            if code == 10030 and tentativa < tentativas - 1:  # limite de requisições
-                time.sleep(2 ** (tentativa + 1))
+            if code in (10030, 10000) and tentativa < tentativas - 1:  # limite / instabilidade
+                time.sleep(3 * (tentativa + 1))
                 continue
             raise ShopeeAPIError(f"Erro da API Shopee ({code}): {msg}", code)
         raise ShopeeAPIError("Falha após várias tentativas")
 
-    def _query_produtos(self, campos, keyword, sort_type, limit, page):
-        args = f"keyword: {_s(keyword)}, sortType: {int(sort_type)}, page: {int(page)}, limit: {int(limit)}"
+    # Variações de argumentos da busca: a Shopee às vezes muda o que aceita.
+    # O bot testa na ordem e guarda a primeira que funcionar.
+    VARIACOES = (
+        lambda kw, st, lim, pg: f"keyword: {_s(kw)}, sortType: {int(st)}, page: {int(pg)}, limit: {int(lim)}",
+        lambda kw, st, lim, pg: f"keyword: {_s(kw)}, page: {int(pg)}, limit: {int(lim)}",
+        lambda kw, st, lim, pg: f"keyword: {_s(kw)}, limit: {int(lim)}",
+        lambda kw, st, lim, pg: f"keyword: {_s(kw)}, sortType: 1, page: {int(pg)}, limit: {int(lim)}",
+        lambda kw, st, lim, pg: f"keyword: {_s(kw)}, listType: 0, page: {int(pg)}, limit: {int(lim)}",
+    )
+
+    def _query_produtos(self, campos, keyword, sort_type, limit, page, variacao=0):
+        args = self.VARIACOES[variacao](keyword, sort_type, limit, page)
         return f"{{ productOfferV2({args}) {{ nodes {{ {campos} }} pageInfo {{ page limit hasNextPage }} }} }}"
 
     def buscar_produtos(self, keyword: str, sort_type: int = 2, limit: int = 20, page: int = 1) -> list:
-        opcoes = [self._campos] if self._campos else [CAMPOS_COMPLETOS, CAMPOS_MEDIOS, CAMPOS_MINIMOS]
+        todos = [(c, v) for v in range(len(self.VARIACOES)) for c in (CAMPOS_COMPLETOS, CAMPOS_MEDIOS, CAMPOS_MINIMOS)]
+        combos = todos
+        if self._campos is not None and self._variacao is not None:
+            # começa pelo formato que já funcionou; se falhar, tenta os outros
+            combos = [(self._campos, self._variacao)] + [x for x in todos if x != (self._campos, self._variacao)]
         ultimo = None
-        for campos in opcoes:
+        for campos, v in combos:
             try:
-                data = self._call(self._query_produtos(campos, keyword, sort_type, limit, page))
-                self._campos = campos
+                data = self._call(self._query_produtos(campos, keyword, sort_type, limit, page, v))
+                self._campos, self._variacao = campos, v
                 return data["productOfferV2"]["nodes"] or []
             except ShopeeAPIError as e:
                 ultimo = e
-                if e.code in (10020, 10030):  # senha errada / limite: não adianta trocar campos
+                if e.code in (10020, 10030):  # senha errada / limite: não adianta variar
                     raise
         raise ultimo
 
-    def link_curto(self, url: str, sub_id: str = "bot") -> str:
-        sub = "".join(c for c in sub_id if c.isalnum())[:50] or "bot"
-        q = f"mutation {{ generateShortLink(input: {{ originUrl: {_s(url)}, subIds: [{_s(sub)}] }}) {{ shortLink }} }}"
+    def link_curto(self, url: str, sub_id: str = "bot", prefixo: str = "") -> str:
+        limpa = lambda t: "".join(c for c in t if c.isalnum())[:50]
+        subs = [x for x in (limpa(prefixo), limpa(sub_id) or "bot") if x]
+        lista = ", ".join(_s(x) for x in subs)
+        q = f"mutation {{ generateShortLink(input: {{ originUrl: {_s(url)}, subIds: [{lista}] }}) {{ shortLink }} }}"
         return self._call(q)["generateShortLink"]["shortLink"]
 
     def diagnostico(self) -> list:
         """Testa consultas da mais simples à completa. Usado pelo 1_TESTAR."""
-        testes = [
-            ("Consulta mínima", "{ productOfferV2(limit: 1) { nodes { productName } } }"),
-            ("Busca por palavra", self._query_produtos("productName", "ssd", 2, 1, 1)),
-            ("Campos mínimos", self._query_produtos(CAMPOS_MINIMOS, "ssd", 2, 1, 1)),
-            ("Campos médios", self._query_produtos(CAMPOS_MEDIOS, "ssd", 2, 1, 1)),
-            ("Campos completos", self._query_produtos(CAMPOS_COMPLETOS, "ssd", 2, 1, 1)),
-        ]
+        testes = [("Consulta mínima", "{ productOfferV2(limit: 1) { nodes { productName } } }")]
+        nomes = ["palavra+ordem+página", "palavra+página", "só palavra", "palavra+ordem 1", "palavra+listType"]
+        for i, n in enumerate(nomes):
+            testes.append((f"Busca ({n})", self._query_produtos("productName", "ssd", 2, 1, 1, i)))
+        testes.append(("Campos completos", self._query_produtos(CAMPOS_COMPLETOS, "ssd", 2, 1, 1, 2)))
         resultado = []
         for nome, q in testes:
             try:
