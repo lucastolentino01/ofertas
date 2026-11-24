@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main   # sempre a versão mais nova (evita conflito quando uma rodada espera a outra)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -57,7 +59,7 @@ jobs:
           git config user.email "bot-ofertas@users.noreply.github.com"
           git add data docs
           git diff --cached --quiet || git commit -m "ofertas $(date -u +%F_%H%M)"
-          git pull --rebase --autostash || true
+          git pull --rebase -X theirs --autostash || git rebase --abort || true
           git push
 
       - name: Publicar stories no Instagram
@@ -76,5 +78,5 @@ jobs:
         run: |
           git add data
           git diff --cached --quiet || git commit -m "instagram $(date -u +%F_%H%M)"
-          git pull --rebase --autostash || true
+          git pull --rebase -X theirs --autostash || git rebase --abort || true
           git push
