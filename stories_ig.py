@@ -6,6 +6,7 @@ publicar_stories.py, que roda logo depois no GitHub.
 """
 import io
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,20 +19,34 @@ PASTA = BASE / "docs" / "stories"
 FILA = BASE / "data" / "stories_pendentes.json"
 BRT = timezone(timedelta(hours=-3))
 
+from temas import tema
+
 W, H = 1080, 1920
-PRETO, LARANJA, BRANCO, CINZA = (18, 18, 20), (255, 106, 43), (255, 255, 255), (160, 160, 168)
+T = tema()
+FUNDO, BRILHO = T["fundo"], T["fundo_brilho"]
+TEXTO, CINZA = T["texto"], T["texto_suave"]
+LARANJA, SOBRE = T["destaque"], T["sobre_destaque"]
+CARTAO = T["cartao"]
 
 
-def _f(nome, tam):
+def _f(spec, tam):
+    nome, variacao = spec
     try:
-        return ImageFont.truetype(str(FONTES / nome), tam)
+        f = ImageFont.truetype(str(FONTES / nome), tam)
+        if variacao:
+            try:
+                f.set_variation_by_axes([variacao])
+            except Exception:
+                pass
+        return f
     except OSError:
         return ImageFont.load_default(tam)
 
 
-BLACK = lambda t: _f("InterDisplay-Black.otf", t)
-BOLD = lambda t: _f("Inter-Bold.otf", t)
-MED = lambda t: _f("Inter-Medium.otf", t)
+BLACK = lambda t: _f(T["f_titulo"], t)
+MARCA = lambda t: _f(T["f_marca"], t)
+BOLD = lambda t: _f(T["f_bold"], t)
+MED = lambda t: _f(T["f_med"], t)
 
 
 def _brl(v):
@@ -39,10 +54,10 @@ def _brl(v):
 
 
 def _fundo():
-    img = Image.new("RGB", (W, H), PRETO)
+    img = Image.new("RGB", (W, H), FUNDO)
     brilho = Image.new("L", (W, H), 0)
-    ImageDraw.Draw(brilho).ellipse((W - 700, -400, W + 500, 800), fill=60)
-    img.paste(Image.new("RGB", (W, H), (50, 50, 56)), mask=brilho.filter(ImageFilter.GaussianBlur(220)))
+    ImageDraw.Draw(brilho).ellipse((W - 700, -400, W + 500, 800), fill=60 if FUNDO[0] < 100 else 160)
+    img.paste(Image.new("RGB", (W, H), BRILHO), mask=brilho.filter(ImageFilter.GaussianBlur(220)))
     return img
 
 
@@ -92,14 +107,15 @@ def desenhar(o, canal="@techbarato_ofertas", arroba="@techbarato.ofertas", foto=
     d = ImageDraw.Draw(img)
 
     # topo
-    f = BOLD(32)
-    d.rounded_rectangle((90, 220, 90 + d.textlength("ACHADINHO DO DIA", font=f) + 48, 288), radius=12, fill=LARANJA)
-    d.text((114, 254), "ACHADINHO DO DIA", font=f, fill=PRETO, anchor="lm")
-    d.text((W - 90, 254), "TECH BARATO", font=BLACK(40), fill=BRANCO, anchor="rm")
+    f = BOLD(30)
+    selo = "ACHADINHO SHEIN" if o.get("loja") == "Shein" else T["selo"]
+    d.rounded_rectangle((90, 220, 90 + d.textlength(selo, font=f) + 48, 288), radius=34 if T["marca"] == "Luluba" else 12, fill=LARANJA)
+    d.text((114, 254), selo, font=f, fill=SOBRE, anchor="lm")
+    d.text((W - 90, 254), T["marca"], font=MARCA(56 if T["marca"] == "Luluba" else 40), fill=TEXTO if T["marca"] != "Luluba" else (158, 74, 92), anchor="rm")
 
     # foto
     x0, y0, x1, y1 = 90, 330, W - 90, 330 + 680
-    d.rounded_rectangle((x0, y0, x1, y1), radius=44, fill=BRANCO)
+    d.rounded_rectangle((x0, y0, x1, y1), radius=44, fill=CARTAO)
     foto = foto if foto is not None else _foto(o.get("imagem"))
     if foto:
         foto = ImageOps.contain(foto, (x1 - x0 - 60, y1 - y0 - 60))
@@ -109,8 +125,8 @@ def desenhar(o, canal="@techbarato_ofertas", arroba="@techbarato.ofertas", foto=
     if o.get("desconto"):
         r, cx, cy = 115, x1 - 135, y0 + 135
         d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=LARANJA)
-        d.text((cx, cy - 20), f"{o['desconto']}%", font=BLACK(80), fill=PRETO, anchor="mm")
-        d.text((cx, cy + 46), "OFF", font=BLACK(40), fill=PRETO, anchor="mm")
+        d.text((cx, cy - 20), f"{o['desconto']}%", font=BLACK(80), fill=SOBRE, anchor="mm")
+        d.text((cx, cy + 46), "OFF", font=BLACK(40), fill=SOBRE, anchor="mm")
 
     # nota e vendas sobre a foto
     meta = []
@@ -122,13 +138,13 @@ def desenhar(o, canal="@techbarato_ofertas", arroba="@techbarato.ofertas", foto=
         t = " · ".join(meta)
         fm = BOLD(30)
         w = d.textlength(t, font=fm)
-        d.rounded_rectangle((x0 + 30, y1 - 90, x0 + 30 + w + 40, y1 - 30), radius=12, fill=(18, 18, 20), outline=LARANJA, width=3)
-        d.text((x0 + 50, y1 - 60), t, font=fm, fill=BRANCO, anchor="lm")
+        d.rounded_rectangle((x0 + 30, y1 - 90, x0 + 30 + w + 40, y1 - 30), radius=12, fill=FUNDO, outline=LARANJA, width=3)
+        d.text((x0 + 50, y1 - 60), t, font=fm, fill=TEXTO, anchor="lm")
 
     # nome
     y = y1 + 46
     for linha in _quebrar(d, _nome_curto(o["nome"]), BOLD(52), W - 180, 2):
-        d.text((90, y), linha, font=BOLD(52), fill=BRANCO)
+        d.text((90, y), linha, font=BOLD(52), fill=TEXTO)
         y += 64
 
     # preço
@@ -148,13 +164,24 @@ def desenhar(o, canal="@techbarato_ofertas", arroba="@techbarato.ofertas", foto=
     d.text((xi + d.textlength(inteiro, font=BLACK(200)) + 4, base - 92), "," + cent, font=BLACK(96), fill=LARANJA, anchor="ls")
 
     # chamada (o story automático não tem adesivo de link)
+    palavra = os.getenv("STORY_PALAVRA", "").strip().upper()
+    if palavra:  # "Responde QUERO que eu te mando o link no direct" (ManyChat responde)
+        cy0 = base + 60
+        d.rounded_rectangle((90, cy0, W - 90, cy0 + 130), radius=40 if T["marca"] == "Luluba" else 20,
+                            fill=(158, 74, 92) if T["marca"] == "Luluba" else LARANJA)
+        d.text((W // 2, cy0 + 50), f"Responde {palavra}", font=BLACK(54), fill=SOBRE, anchor="mm")
+        d.text((W // 2, cy0 + 100), "que eu te mando o link no direct", font=MED(30), fill=SOBRE, anchor="mm")
+        yf = max(H - 262, cy0 + 180)
+        d.text((W // 2, yf), "preço pode mudar a qualquer momento", font=MED(26), fill=CINZA, anchor="mm")
+        d.text((W // 2, yf + 48), arroba, font=BOLD(34), fill=TEXTO, anchor="mm")
+        return img
     cy0 = H - 470
     d.rounded_rectangle((90, cy0, W - 90, cy0 + 170), radius=28, fill=LARANJA)
-    d.text((W // 2, cy0 + 58), "LINK NO TELEGRAM", font=BLACK(54), fill=PRETO, anchor="mm")
-    d.text((W // 2, cy0 + 120), f"toque na bio  →  {canal}", font=BOLD(34), fill=PRETO, anchor="mm")
+    d.text((W // 2, cy0 + 58), T["cta"], font=BLACK(54), fill=SOBRE, anchor="mm")
+    d.text((W // 2, cy0 + 120), f"toque na bio{T.get('seta', '  →  ')}{canal}", font=BOLD(32), fill=SOBRE, anchor="mm")
 
     d.text((W // 2, H - 262), "preço pode mudar a qualquer momento", font=MED(26), fill=CINZA, anchor="mm")
-    d.text((W // 2, H - 214), arroba, font=BOLD(34), fill=BRANCO, anchor="mm")
+    d.text((W // 2, H - 214), arroba, font=BOLD(34), fill=TEXTO, anchor="mm")
     return img
 
 

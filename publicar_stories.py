@@ -274,6 +274,69 @@ def publicar_um(token, uid, url):
     return ig("POST", f"{uid}/media_publish", token, creation_id=cid)["id"]
 
 
+REELS_FILA = BASE / "data" / "reels_pendentes.json"
+REELS_FEITOS = BASE / "data" / "reels_publicados.json"
+
+
+def url_pages(arquivo):
+    """Vídeo vai pelo GitHub Pages (manda o tipo video/mp4 certinho para o Instagram)."""
+    base = cfg("IG_IMAGE_BASE_URL")
+    if base:
+        return base.rstrip("/") + "/" + arquivo.split("docs/", 1)[-1]
+    repo = os.getenv("GITHUB_REPOSITORY", "")
+    if "/" not in repo:
+        raise RuntimeError("Sem GITHUB_REPOSITORY: rode no GitHub ou defina IG_IMAGE_BASE_URL")
+    dono, nome = repo.split("/", 1)
+    return f"https://{dono.lower()}.github.io/{nome}/" + arquivo.split("docs/", 1)[-1]
+
+
+def publicar_reel(token, uid, url, legenda):
+    c = ig("POST", f"{uid}/media", token, video_url=url, media_type="REELS",
+           caption=legenda, share_to_feed="true")
+    cid = c["id"]
+    for _ in range(40):  # vídeo demora mais: até ~5 min processando
+        st = ig("GET", cid, token, fields="status_code").get("status_code")
+        if st == "FINISHED":
+            break
+        if st in ("ERROR", "EXPIRED"):
+            raise ErroIG(f"Instagram não aceitou o vídeo (status {st})")
+        time.sleep(8)
+    else:
+        raise ErroIG("Instagram demorou demais para processar o vídeo")
+    return ig("POST", f"{uid}/media_publish", token, creation_id=cid)["id"]
+
+
+def publicar_reels(token, uid):
+    fila = ler(REELS_FILA, [])
+    if not fila:
+        return
+    feitos = ler(REELS_FEITOS, [])
+    agora = datetime.now(BRT)
+    restantes = []
+    for item in fila:
+        if agora - datetime.fromisoformat(item["criado_em"]) > timedelta(hours=24):
+            print("Reel descartado (ofertas velhas):", item["arquivo"])
+            continue
+        url = url_pages(item["arquivo"])
+        if not esperar_url(url, limite=300):
+            print("Vídeo ainda não está público, tento na próxima rodada:", url)
+            restantes.append(item)
+            continue
+        try:
+            mid = publicar_reel(token, uid, url, item.get("legenda", ""))
+            feitos.append({**item, "media_id": mid, "publicado_em": agora.isoformat()})
+            print("🎬 Reel publicado:", item["arquivo"])
+        except ErroIG as e:
+            item["tentativas"] = item.get("tentativas", 0) + 1
+            print(f"❌ Reel falhou ({item['tentativas']}ª vez): {e}")
+            if item["tentativas"] < 3:
+                restantes.append(item)
+            else:
+                avisar(f"Desisti de publicar o reel do dia após 3 tentativas.\nErro: {e}")
+    salvar(REELS_FILA, restantes)
+    salvar(REELS_FEITOS, feitos[-60:])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--testar", action="store_true")
@@ -369,6 +432,11 @@ def main():
     salvar(FILA, restantes)
     salvar(FEITOS, feitos[-200:])
     print(f"Stories publicados agora: {publicados}. Na fila: {len(restantes)}.")
+
+    try:
+        publicar_reels(token, uid)
+    except Exception as e:
+        print(f"[aviso] reels: {e}")
 
 
 if __name__ == "__main__":

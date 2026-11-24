@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 from site_generator import gerar_site
 from telegram_poster import TelegramPoster, montar_mensagem
+from temas import tema
 
 BASE = Path(__file__).parent
 DATA = BASE / "data"
@@ -24,6 +25,7 @@ POSTADOS = DATA / "postados.json"     # itemId -> data do post (evita repetir)
 OFERTAS = DATA / "ofertas.json"       # vitrine do site
 WHATS = DATA / "whatsapp_hoje.txt"    # textos prontos p/ colar no WhatsApp
 FILA = DATA / "fila.csv"              # modo manual: produtos que você cadastrou
+FILA_SHEIN = DATA / "fila_shein.csv"  # peças da Shein com o seu link de afiliado
 BRT = timezone(timedelta(hours=-3))
 
 
@@ -157,7 +159,7 @@ def main():
             o["categoria"] = kw
             if o["id"] not in postados and (not busca_exata or combina_com_busca(o["nome"], kw)) and passa_filtro(o, min_desc, min_nota, min_vendas, preco_max, getattr(api, "_campos", None)):
                 candidatos.append(o)
-        time.sleep(0 if args.teste else 1)
+        time.sleep(0 if args.teste else 3)
 
     # prioriza: maior desconto, depois mais vendas; evita repetir a mesma categoria em sequência
     candidatos.sort(key=lambda o: (o["desconto"], o["vendas"]), reverse=True)
@@ -174,6 +176,19 @@ def main():
         if o not in escolhidos:
             escolhidos.append(o)
 
+    # Shein (semiautomático): pega as próximas peças da planilha data/fila_shein.csv
+    shein_fila, shein_resto = [], []
+    n_shein = int(cfg("SHEIN_POR_RODADA", 1))
+    if n_shein > 0 and FILA_SHEIN.exists():
+        from fila_manual import ler_fila
+        todas = ler_fila(FILA_SHEIN)
+        shein_fila, shein_resto = todas[:n_shein], todas[n_shein:]
+        for o in shein_fila:
+            o["loja"] = "Shein"
+            o["categoria"] = o.get("categoria") or "Shein"
+        escolhidos = shein_fila + escolhidos[:max(0, por_execucao - len(shein_fila))]
+        print(f"Shein: {len(shein_fila)} da planilha nesta rodada, {len(shein_resto)} esperando.")
+
     print(f"{len(candidatos)} ofertas passaram no filtro; postando {len(escolhidos)}.")
 
     poster = None
@@ -189,7 +204,8 @@ def main():
         # link curto rastreável (subId = categoria, para ver no relatório o que vende)
         if api and o.get("produto_url"):
             try:
-                o["link"] = api.link_curto(o["produto_url"], sub_id=o["categoria"].replace(" ", "")[:50])
+                o["link"] = api.link_curto(o["produto_url"], sub_id=o["categoria"].replace(" ", "")[:50],
+                                           prefixo=cfg("SUBID_PREFIX", ""))
             except Exception as e:
                 print(f"[aviso] link curto falhou, usando offerLink: {e}")
         if poster:
@@ -210,16 +226,32 @@ def main():
         vitrine.insert(0, o)
         textos_whats.append(montar_mensagem(o).replace("<b>", "*").replace("</b>", "*")
                             .replace("<s>", "~").replace("</s>", "~").replace("<i>", "_").replace("</i>", "_")
-                            .replace(f"<a href=\"{o['link']}\">COMPRAR NA SHOPEE</a>", o["link"]))
+                            .replace(f"<a href=\"{o['link']}\">{tema()['botao']}</a>", o["link"]))
 
     # Instagram: gera a arte do story das melhores ofertas e põe na fila
     ig_qtd = int(cfg("IG_STORIES_PER_RUN", 1))
     if (cfg("IG_ACCESS_TOKEN") or args.teste) and not args.previa and enviados and ig_qtd > 0:
         from stories_ig import enfileirar, limpar_antigos
         limpar_antigos()
-        melhores = sorted(enviados, key=lambda o: (o["desconto"], o["vendas"]), reverse=True)
+        melhores = sorted(enviados, key=lambda o: (o.get("loja") == "Shein", o["desconto"], o["vendas"]), reverse=True)
         enfileirar(melhores, cfg("TELEGRAM_CHAT_ID", "@techbarato_ofertas"),
                    cfg("IG_HANDLE", "@techbarato.ofertas"), ig_qtd)
+
+    # Reels: 1 vídeo por dia com as melhores ofertas das últimas horas
+    if (cfg("IG_ACCESS_TOKEN") or args.teste) and not args.previa and cfg("REELS_POR_DIA", "1") != "0":
+        try:
+            import reels_ig
+            reels_ig.limpar_antigos()
+            if reels_ig.hora_de_fazer(int(cfg("REELS_HORA", 19))):
+                reels_ig.enfileirar(vitrine, cfg("TELEGRAM_CHAT_ID", "@techbarato_ofertas"),
+                                    cfg("IG_HANDLE", "@techbarato.ofertas"), int(cfg("REELS_PRODUTOS", 3)))
+        except Exception as e:
+            print(f"[aviso] reel não foi gerado: {e}")
+
+    if shein_fila and not args.teste and not args.previa:
+        from fila_manual import salvar_fila
+        nao_foi = [o for o in shein_fila if o in falhou]
+        salvar_fila(FILA_SHEIN, nao_foi + shein_resto)
 
     if manual and not args.teste and not args.previa:
         from fila_manual import salvar_fila

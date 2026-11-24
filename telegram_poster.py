@@ -3,6 +3,8 @@ import html
 
 import requests
 
+from temas import tema
+
 
 def formatar_preco(valor: float) -> str:
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -10,7 +12,10 @@ def formatar_preco(valor: float) -> str:
 
 def montar_mensagem(oferta: dict) -> str:
     nome = html.escape(oferta["nome"][:120])
-    linhas = [f"🔥 <b>{nome}</b>", ""]
+    T = tema()
+    linhas = [f"{T['emoji']} <b>{nome}</b>", ""]
+    if oferta.get("loja") == "Shein":
+        linhas.insert(0, "🛍️ <b>ACHADINHO SHEIN</b>")
     if oferta.get("desconto"):
         linhas.append(f"🏷️ <b>{oferta['desconto']}% OFF</b>")
     if oferta.get("preco_original") and oferta["preco_original"] > oferta["preco"]:
@@ -23,7 +28,7 @@ def montar_mensagem(oferta: dict) -> str:
         extras.append(f"🛒 {oferta['vendas']} vendidos")
     if extras:
         linhas.append(" · ".join(extras))
-    linhas += ["", f"👉 <a href=\"{oferta['link']}\">COMPRAR NA SHOPEE</a>", "",
+    linhas += ["", f"👉 <a href=\"{oferta['link']}\">{T['botao']}</a>", "",
                "<i>Preço pode mudar a qualquer momento.</i>"]
     return "\n".join(linhas)
 
