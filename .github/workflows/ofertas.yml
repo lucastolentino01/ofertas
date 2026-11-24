@@ -44,6 +44,11 @@ jobs:
           IG_HANDLE: ${{ vars.IG_HANDLE }}
           THEME: ${{ vars.THEME }}
           SUBID_PREFIX: ${{ vars.SUBID_PREFIX }}
+          REELS_HORA: ${{ vars.REELS_HORA }}
+          REELS_POR_DIA: ${{ vars.REELS_POR_DIA }}
+          REELS_PRODUTOS: ${{ vars.REELS_PRODUTOS }}
+          REELS_PALAVRA: ${{ vars.REELS_PALAVRA }}
+          STORY_PALAVRA: ${{ vars.STORY_PALAVRA }}
         run: python main.py
 
       - name: Salvar histórico, site e imagens dos stories
